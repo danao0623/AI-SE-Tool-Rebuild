@@ -16,3 +16,5 @@ class UserAccount(Base):
 
     def __repr__(self):
         return f"<UserAccount(id={self.id}, account='{self.account}')>"
+
+from models.project import Project  

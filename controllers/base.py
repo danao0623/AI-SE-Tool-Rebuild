@@ -76,3 +76,21 @@ class BaseController:
 
             print(f"📋 查詢結果 ({len(records)} 筆): {records}")
             return records
+        
+    # 📍 查詢單筆資料（例如根據帳號、ID）
+    @classmethod
+    async def get_single(cls, **filters):
+        """
+        根據傳入條件（如 account='willy'）回傳第一筆匹配的資料。
+        若無結果則回傳 None。
+        """
+        async with get_async_session_context() as session:
+            query = select(cls.model)
+            for key, value in filters.items():
+                column = getattr(cls.model, key)
+                query = query.where(column == value)
+
+            result = await session.execute(query)
+            obj = result.scalars().first()
+            print(f"🔍 單筆查詢結果: {obj}")
+            return obj
