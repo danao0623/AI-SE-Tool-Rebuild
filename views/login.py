@@ -2,7 +2,7 @@ from nicegui import ui
 from flow_controllers.login import LoginFlowController
 import asyncio
 
-def login_page(on_login=None, on_register=None):
+def login_page(on_login=None, on_register=None, redirect_url='/project'):
     """登入頁面 View（負責顯示畫面與 UI 互動）"""
     ui.colors(primary='#2563EB')
     ui.page_title('AI輔助軟體工程工具 - 登入')
@@ -21,9 +21,9 @@ def login_page(on_login=None, on_register=None):
                     ui.notify(result['message'], color=_map_color(result['status']))
                     if result['status'] == 'success':
                         await asyncio.sleep(0.8)
-                        ui.navigate.to('/project')
+                        ui.navigate.to(redirect_url)
 
-            async def on_register_click():     # 註冊按鈕事件
+            async def on_register_click():
                 if on_register:
                     result = await on_register(account.value, password.value)
                     ui.notify(result['message'], color=_map_color(result['status']))
