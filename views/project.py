@@ -84,56 +84,54 @@ def project_page():
         else:
             State.selected_fields.append(field_name)
 
-    # === 🧩 畫面 ===
-    with ui.row().classes('w-full h-full p-6 gap-6 justify-start bg-gray-50 items-start'):
+    # === 畫面配置 ===
+    with ui.element().classes('grid grid-cols-4 gap-6 w-full h-screen bg-gray-50 p-6 items-start'):
 
-        # 🧭 左側流程欄
-        with ui.card().classes('w-1/5 p-5 shadow-md bg-white rounded-xl'):
-            ui.label('🧭 專案流程').classes('text-lg font-bold text-gray-800 mb-3')
-            with ui.stepper().props('vertical').classes('w-full'):
-                ui.step('專案管理').props('active')
-                ui.step('使用案例管理')
-                ui.step('使用案例明細')
-                ui.step('專案物件瀏覽')
-                ui.step('產生程式碼')
-            ui.separator()
-            ui.label('進入專案管理功能').classes('text-gray-500 text-sm text-center mb-2')
+        # 🧭 左側流程
+        with ui.card().classes('col-span-1 p-5 bg-white rounded-xl shadow-md h-full flex flex-col justify-between'):
+            with ui.column():
+                ui.label('🧭 專案流程').classes('text-lg font-bold mb-3 text-gray-800')
+                with ui.stepper().props('vertical').classes('w-full'):
+                    ui.step('專案管理').props('active')
+                    ui.step('使用案例管理')
+                    ui.step('使用案例明細')
+                    ui.step('專案物件瀏覽')
+                    ui.step('產生程式碼')
+                ui.separator()
+                ui.label('進入專案管理功能').classes('text-gray-500 text-sm text-center mb-2')
             ui.button('下一步', color='blue').classes('w-full')
 
-        # ⚙️ 右側主區（中間表單 + 右側AI欄）
-        with ui.row().classes('w-4/5 gap-4 items-stretch'):
+        # 🧠 中間主體
+        with ui.card().classes('col-span-2 p-6 bg-white rounded-xl shadow-md flex flex-col gap-3 overflow-y-auto'):
+            ui.label('📘 專案管理系統').classes('text-2xl font-bold text-center text-indigo-700')
+            ui.label('輸入專案名稱後，AI 將自動生成技術堆疊與描述。').classes('text-center text-gray-500 mb-2')
 
-            # 🧠 中間主體
-            with ui.card().classes('w-3/4 p-6 bg-white rounded-xl shadow-md flex flex-col gap-3'):
-                ui.label('📘 專案管理系統').classes('text-2xl font-bold text-center text-indigo-700')
-                ui.label('輸入專案名稱後，AI 將自動生成技術堆疊與描述。').classes('text-center text-gray-500 mb-2')
+            with ui.row().classes('justify-center gap-3'):
+                project_name_input = ui.input('專案名稱').classes('w-1/2')
+                ui.button('生成專案資料', color='blue', on_click=generate_project).classes('text-white px-4')
 
-                with ui.row().classes('justify-center gap-3'):
-                    project_name_input = ui.input('專案名稱').classes('w-1/2')
-                    ui.button('生成專案資料', color='blue', on_click=generate_project).classes('text-white px-4')
+            with ui.grid(columns=2).classes('w-full gap-3 mt-2'):
+                frontend_lang = ui.input('前端語言')
+                frontend_platform = ui.input('前端平台')
+                frontend_lib = ui.input('前端函式庫')
+                backend_lang = ui.input('後端語言')
+                backend_platform = ui.input('後端平台')
+                backend_lib = ui.input('後端函式庫')
 
-                with ui.grid(columns=2).classes('w-full gap-3 mt-2'):
-                    frontend_lang = ui.input('前端語言')
-                    frontend_platform = ui.input('前端平台')
-                    frontend_lib = ui.input('前端函式庫')
-                    backend_lang = ui.input('後端語言')
-                    backend_platform = ui.input('後端平台')
-                    backend_lib = ui.input('後端函式庫')
+            project_architecture = ui.textarea(label='系統架構').classes('w-full h-24')
+            project_description = ui.textarea(label='專案描述').classes('w-full h-24')
 
-                project_architecture = ui.textarea(label='系統架構').classes('w-full h-24')
-                project_description = ui.textarea(label='專案描述').classes('w-full h-24')
+        # 🤖 右側 AI 再生
+        with ui.card().classes('col-span-1 p-5 bg-white rounded-xl shadow-md flex flex-col gap-3 h-full'):
+            ui.label('🤖 AI 欄位再生').classes('text-lg font-bold text-indigo-700 mb-2 text-center')
+            ui.label('選擇要重新生成的欄位：').classes('text-sm text-gray-600 mb-2')
 
-            # 🤖 右側AI再生控制
-            with ui.card().classes('w-1/4 p-5 bg-white rounded-xl shadow-md flex flex-col gap-3'):
-                ui.label('🤖 AI 欄位再生').classes('text-lg font-bold text-indigo-700 mb-2 text-center')
-                ui.label('選擇要重新生成的欄位：').classes('text-sm text-gray-600 mb-2')
+            for label in ['專案描述', '系統架構', '前端語言', '前端平台', '前端函式庫',
+                          '後端語言', '後端平台', '後端函式庫']:
+                with ui.row().classes('justify-between items-center w-full'):
+                    ui.label(label)
+                    ui.checkbox(on_change=lambda e, f=label: toggle_field(f))
 
-                for label in ['專案描述', '系統架構', '前端語言', '前端平台', '前端函式庫',
-                              '後端語言', '後端平台', '後端函式庫']:
-                    with ui.row().classes('justify-between items-center w-full'):
-                        ui.label(label)
-                        ui.checkbox(on_change=lambda e, f=label: toggle_field(f))
-
-                ui.button('重新生成選取欄位', color='green', on_click=regenerate_selected).classes('w-full mt-3')
-                spinner = ui.spinner(size='lg', color='blue')
-                spinner.bind_visibility_from(State, 'loading')
+            ui.button('重新生成選取欄位', color='green', on_click=regenerate_selected).classes('w-full mt-3')
+            spinner = ui.spinner(size='lg', color='blue')
+            spinner.bind_visibility_from(State, 'loading')
