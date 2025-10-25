@@ -1,5 +1,5 @@
 import requests, json
-from api_sys import API_URL, HEADERS
+from api.api_sys import API_URL, HEADERS
 
 data = {
     "contents": [
