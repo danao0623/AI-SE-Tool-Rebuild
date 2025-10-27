@@ -1,7 +1,7 @@
 import asyncio
 from init_db import create_db_and_tables, get_async_session_context
-from controllers.user_account import UserAccountController
-from controllers.project import ProjectController
+from controllers.user_account_controller import UserAccountController
+from controllers.project_controller import ProjectController
 
 async def main():
     # ✅ 確保資料表存在

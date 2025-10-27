@@ -1,5 +1,5 @@
 from models.user_account import UserAccount
-from controllers.base import BaseController
+from controllers.base_controller import BaseController
 from sqlalchemy.exc import IntegrityError
 
 class UserAccountController(BaseController):

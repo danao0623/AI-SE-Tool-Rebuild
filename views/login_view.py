@@ -1,5 +1,5 @@
 from nicegui import ui
-from flow_controllers.login import LoginFlowController
+from flow_controllers.login_flow import LoginFlowController
 import asyncio
 
 def login_page(on_login=None, on_register=None, redirect_url='/project'):
