@@ -1,4 +1,3 @@
-# 📁 agents/project_agent.py
 import aiohttp
 import asyncio
 import json
@@ -9,7 +8,7 @@ from utils.json_cleaner import clean_json_text
 class ProjectAgent:
     """AI 專案生成 Agent - 專職 AI 溝通"""
 
-    # === 🧠 初次生成專案資料 ===
+    # === 🧠 初次或完整再生皆可用 ===
     @staticmethod
     async def generate_project_json(project_name: str) -> dict:
         """根據專案名稱生成完整專案 JSON"""
@@ -17,6 +16,7 @@ class ProjectAgent:
 你是一名資深系統設計師。
 請根據使用者輸入的專案名稱「{project_name}」，產生一份標準 JSON 結構的系統設計初稿。
 請使用繁體中文，且只輸出 JSON，不要任何多餘文字。
+（本輸出將作為完整再生依據）
 
 JSON 結構如下：
 {{
@@ -38,52 +38,10 @@ JSON 結構如下：
 """
         return await ProjectAgent._send_request(prompt)
 
-    # === 🔁 再生指定欄位 ===
-    @staticmethod
-    async def regenerate_fields(project_name: str, fields: list[str]) -> dict:
-        """針對指定欄位重新生成合理內容"""
-        field_mapping = {
-            "專案描述": "description",
-            "系統架構": "architecture",
-            "前端語言": "frontend.language",
-            "前端平台": "frontend.platform",
-            "前端函式庫": "frontend.library",
-            "後端語言": "backend.language",
-            "後端平台": "backend.platform",
-            "後端函式庫": "backend.library",
-        }
-
-        translated_fields = [field_mapping.get(f, f) for f in fields]
-
-        prompt = f"""
-你的角色：系統分析與架構設計專家。  
-請根據專案名稱「{project_name}」，僅重新生成以下欄位：
-{', '.join(translated_fields)}
-
-請直接輸出 JSON，不要其他文字。
-若屬於 frontend 或 backend，請放入對應子物件中。
-JSON 範例：
-{{
-  "description": "新的描述內容",
-  "architecture": "新的架構內容",
-  "frontend": {{
-    "language": "React",
-    "platform": "Web",
-    "library": "TailwindCSS"
-  }},
-  "backend": {{
-    "language": "Python",
-    "platform": "FastAPI",
-    "library": "SQLAlchemy"
-  }}
-}}
-⚠️ 開頭與結尾必須為 {{ 與 }}。
-"""
-        return await ProjectAgent._send_request(prompt)
-
-    # === 🚀 呼叫 Gemini 並解析結果（強化容錯版） ===
+    # === 🚀 呼叫 Gemini 並解析結果（含詳細終端輸出） ===
     @staticmethod
     async def _send_request(prompt: str) -> dict:
+        """呼叫 Gemini 並印出三階段輸出：原始 → 清理後 → 解析後"""
         data = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -94,7 +52,7 @@ JSON 範例：
             },
         }
 
-        for attempt in range(3):  # 最多嘗試 3 次
+        for attempt in range(3):
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(API_URL, headers=HEADERS, json=data, timeout=60) as response:
@@ -111,43 +69,44 @@ JSON 範例：
                             .get("text", "{}")
                         )
 
-                        print("\n🧠 原始 AI 回覆文字：")
+                        # === 🧠 第1段：原始 AI 回傳文字 ===
+                        print("\n🧠【原始 AI 回覆文字】")
+                        print("-" * 80)
                         print(text)
+                        print("-" * 80)
 
-                        # 🔹 偵測並提取 ```json 區塊
+                        # 清理出 JSON 區塊
                         if "```json" in text:
                             start = text.find("```json") + len("```json")
                             end = text.rfind("```")
                             text = text[start:end].strip()
-
-                        # 🔹 自動補齊缺失的結尾
-                        if text.count("{") > text.count("}"):
-                            text += "}" * (text.count("{") - text.count("}"))
-
-                        # 🔹 嘗試擷取最外層 JSON
                         if "{" in text and "}" in text:
                             text = text[text.find("{"): text.rfind("}") + 1]
 
-                        # 🔹 清理亂字
+                        # === 🧹 第2段：清理後文字 ===
                         cleaned = clean_json_text(text) if "clean_json_text" in globals() else text
-                        print("\n🧹 清理後 JSON 文字：")
+                        print("\n🧹【清理後 JSON 文字】")
+                        print("-" * 80)
                         print(cleaned)
+                        print("-" * 80)
 
-                        # 🔹 嘗試解析
+                        # 嘗試解析成 JSON
+                        json_data = {}
                         try:
                             json_data = json.loads(cleaned)
                         except json.JSONDecodeError:
-                            print("⚠️ JSON 格式仍有問題，嘗試自動修復。")
-                            fixed_text = cleaned.replace("```", "").replace("json", "")
-                            fixed_text = fixed_text.replace("\\n", "\n").strip()
-                            json_data = json.loads(fixed_text)
+                            print("⚠️ JSONDecodeError，嘗試修復格式…")
+                            fixed = cleaned.replace("\\n", "\n").replace("```", "").strip()
+                            json_data = json.loads(fixed)
 
-                        print("\n📦 解析後 JSON 物件：")
+                        # === 📦 第3段：解析後 JSON 結構 ===
+                        print("\n📦【解析後 JSON 物件】")
                         print(json.dumps(json_data, indent=4, ensure_ascii=False))
+                        print("=" * 80)
 
                         if not json_data:
-                            print("⚠️ 回傳為空物件，嘗試重試…")
-                            await asyncio.sleep(2)
+                            print("⚠️ 回傳為空物件，重試中…")
+                            await asyncio.sleep(1.5)
                             continue
 
                         return json_data
@@ -159,21 +118,5 @@ JSON 範例：
 
             await asyncio.sleep(1.5)
 
-        # === 若三次都失敗，執行 fallback prompt ===
-        print("🚫 三次嘗試均失敗，執行補救 prompt。")
-        fallback = {
-            "contents": [{"parts": [{"text": prompt + "\n請務必完整輸出 JSON，不要留空或錯誤。"}]}]
-        }
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(API_URL, headers=HEADERS, json=fallback, timeout=60) as resp:
-                    text = (await resp.text()).strip()
-                    if "{" in text and "}" in text:
-                        text = text[text.find("{"): text.rfind("}") + 1]
-                        return json.loads(text)
-        except Exception as e:
-            print(f"⚠️ Fallback 仍失敗：{e}")
-
-        print("⚠️ 全部嘗試失敗，返回空字典。")
+        print("🚫 三次嘗試均失敗，返回空字典。")
         return {}

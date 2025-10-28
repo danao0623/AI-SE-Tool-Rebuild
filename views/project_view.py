@@ -5,62 +5,76 @@ from flow_controllers.project_flow import ProjectFlowController
 
 
 def project_page():
-    """AI 專案管理頁面（完整版：生成、儲存、開啟、刪除、再生）"""
+    """AI 專案管理頁面（支援 開啟/刪除；更新時清掉後續產物；可再生欄位）"""
 
     class State:
         loading = False
         selected_fields = []
-        generated_data = {}
-        selected_project = None
+        generated_data = {}      # 以「顯示標籤」為 key 的暫存（方便直接綁 UI）
+        selected_project = None  # aggrid 選到的 row 資料
 
-    # === 🧠 生成專案資料 ===
+    # --- 共用：把 dict 值回填到表單 ---
+    def update_fields(data: dict):
+        mapping = {
+            "專案描述": project_description,
+            "系統架構": project_architecture,
+            "前端語言": frontend_lang,
+            "前端平台": frontend_platform,
+            "前端函式庫": frontend_lib,
+            "後端語言": backend_lang,
+            "後端平台": backend_platform,
+            "後端函式庫": backend_lib,
+        }
+        for label, value in data.items():
+            if label in mapping:
+                mapping[label].value = value
+                State.generated_data[label] = value
+
+    # --- 初次生成（固定 baseline）---
     async def generate_project():
         name = project_name_input.value.strip()
         if not name:
-            ui.notify("請輸入專案名稱", color="red")
-            return
+            return ui.notify("請輸入專案名稱", color="red")
 
-        State.loading = True
         ui.notify("AI 生成中...", color="blue")
-        data = await ProjectFlowController.generate_project_data(name)
+        State.loading = True
+        rows = await ProjectFlowController.generate_project_data(name)
         State.loading = False
 
-        if not data:
-            ui.notify("AI 生成失敗", color="red")
-            return
+        if not rows:
+            return ui.notify("AI 生成失敗", color="red")
 
-        for row in data:
-            label, content = row["項目"], row["內容"]
-            State.generated_data[label] = content
-            if label == "專案描述":
-                project_description.value = content
-            elif label == "系統架構":
-                project_architecture.value = content
-            elif label == "前端語言":
-                frontend_lang.value = content
-            elif label == "前端平台":
-                frontend_platform.value = content
-            elif label == "前端函式庫":
-                frontend_lib.value = content
-            elif label == "後端語言":
-                backend_lang.value = content
-            elif label == "後端平台":
-                backend_platform.value = content
-            elif label == "後端函式庫":
-                backend_lib.value = content
+        # 轉 row -> label dict，並回填 UI
+        State.generated_data = {r["項目"]: r["內容"] for r in rows}
+        update_fields(State.generated_data)
+        ui.notify("AI 初次生成完成 ✅", color="green")
 
-        ui.notify("AI 生成完成，可修改後按『💾 儲存專案』", color="green")
+    # --- 再生（完整重生，但只覆蓋勾選欄位）---
+    async def regenerate_selected():
+        name = project_name_input.value.strip()
+        if not name:
+            return ui.notify("請輸入專案名稱", color="red")
+        if not State.selected_fields:
+            return ui.notify("請選擇要再生的欄位", color="red")
 
-    # === 💾 儲存專案 ===
+        ui.notify(f"AI 正在重新生成：{', '.join(State.selected_fields)}...", color="blue")
+        State.loading = True
+        new_rows = await ProjectFlowController.regenerate_selected_fields(
+            name, State.selected_fields, State.generated_data
+        )
+        State.loading = False
+
+        new_data = {r["項目"]: r["內容"] for r in new_rows if r["內容"]}
+        update_fields(new_data)
+        ui.notify("AI 再生完成 ✅", color="green")
+
+    # --- 儲存（若「核心欄位有變」→ 自動清掉 2/3 階段產物）---
     async def save_project():
         name = project_name_input.value.strip()
         if not name:
-            ui.notify("請輸入專案名稱", color="red")
-            return
+            return ui.notify("請輸入專案名稱", color="red")
 
-        ui.notify("資料儲存中...", color="blue")
-
-        project_data = {
+        data = {
             "name": name,
             "description": project_description.value,
             "architecture": project_architecture.value,
@@ -71,113 +85,82 @@ def project_page():
             "backend_platform": backend_platform.value,
             "backend_library": backend_lib.value,
         }
+        ui.notify("資料儲存中...", color="blue")
+        result = await ProjectFlowController.save_project(data)
 
-        success = await ProjectFlowController.save_project(project_data)
-        if success:
-            ui.notify("專案資料已儲存 ✅", color="green")
-            await refresh_project_table()
-        else:
-            ui.notify("資料儲存失敗，請確認登入狀態", color="red")
+        if not result.get("ok"):
+            return ui.notify("儲存失敗，請確認登入狀態", color="red")
 
-    # === 📂 開啟專案（方法一：從資料庫重新查）===
-    async def on_open_project(e=None):
-        selected = State.selected_project
-        if not selected:
-            ui.notify("請選擇要開啟的專案", color="red")
-            return
+        await refresh_project_table()
+        action = result.get("action")
+        if action == "created":
+            ui.notify("專案已新增 ✅", color="green")
+        elif action == "updated":
+            ui.notify("專案已更新（內容無重大變更）✅", color="green")
+        elif action == "updated_purged":
+            ui.notify("專案已更新 ✅ — 由於核心設定變更，已清空後續(UseCase/Detail/物件/圖/檔案)產物", color="orange")
 
-        project_detail = await ProjectFlowController.get_project_detail(selected["id"])
-        if not project_detail:
-            ui.notify("找不到專案資料", color="red")
-            return
+    # --- 開啟專案（把 DB 內容塞回上方表單）---
+    async def on_open_project():
+        row = State.selected_project
+        if not row:
+            return ui.notify("請先在下方選擇一個專案", color="red")
 
-        project_name_input.value = project_detail["name"]
-        project_description.value = project_detail["description"]
-        project_architecture.value = project_detail["architecture"]
-        frontend_lang.value = project_detail["frontend_language"]
-        frontend_platform.value = project_detail["frontend_platform"]
-        frontend_lib.value = project_detail["frontend_library"]
-        backend_lang.value = project_detail["backend_language"]
-        backend_platform.value = project_detail["backend_platform"]
-        backend_lib.value = project_detail["backend_library"]
+        detail = await ProjectFlowController.get_project_detail(row["id"])
+        if not detail:
+            return ui.notify("找不到專案內容", color="red")
 
-        ui.notify(f"已開啟專案：{project_detail['name']}", color="green")
+        # 回填
+        project_name_input.value = detail["name"]
+        update_fields({
+            "專案描述": detail["description"],
+            "系統架構": detail["architecture"],
+            "前端語言": detail["frontend_language"],
+            "前端平台": detail["frontend_platform"],
+            "前端函式庫": detail["frontend_library"],
+            "後端語言": detail["backend_language"],
+            "後端平台": detail["backend_platform"],
+            "後端函式庫": detail["backend_library"],
+        })
+        ui.notify(f"已開啟專案：{detail['name']}", color="green")
 
-    # === 🗑️ 刪除專案 ===
-    async def on_delete_project(e=None):
-        selected = State.selected_project
-        if not selected:
-            ui.notify("請選擇要刪除的專案", color="red")
-            return
-        await ProjectFlowController.delete_project(selected["id"])
-        ui.notify(f"已刪除專案：{selected['專案名稱']}", color="orange")
+    # --- 刪除專案（含級聯清掉後續產物）---
+    async def on_delete_project():
+        row = State.selected_project
+        if not row:
+            return ui.notify("請先在下方選擇一個專案", color="red")
+        await ProjectFlowController.delete_project(row["id"])
+        ui.notify(f"已刪除專案：{row['專案名稱']}（含後續產物）", color="orange")
         await refresh_project_table()
 
-    # === 📊 更新表格 ===
+    # --- 專案清單（列表）---
     async def refresh_project_table():
-        projects = await ProjectFlowController.list_user_projects()
-        project_table.options["rowData"] = projects
+        rows = await ProjectFlowController.list_user_projects()
+        project_table.options["rowData"] = rows
         project_table.update()
 
-    # === 🔄 再生選取欄位 ===
-    async def regenerate_selected():
-        name = project_name_input.value.strip()
-        if not name:
-            ui.notify("請輸入專案名稱", color="red")
-            return
-        if not State.selected_fields:
-            ui.notify("請選擇要重新生成的欄位", color="red")
-            return
-
-        ui.notify(f"AI 正在重新生成：{', '.join(State.selected_fields)}...", color="blue")
-        State.loading = True
-        data = await ProjectFlowController.regenerate_selected_fields(name, State.selected_fields)
-        State.loading = False
-
-        for row in data:
-            label, content = row["項目"], row["內容"]
-            if label == "專案描述":
-                project_description.value = content
-            elif label == "系統架構":
-                project_architecture.value = content
-            elif label == "前端語言":
-                frontend_lang.value = content
-            elif label == "前端平台":
-                frontend_platform.value = content
-            elif label == "前端函式庫":
-                frontend_lib.value = content
-            elif label == "後端語言":
-                backend_lang.value = content
-            elif label == "後端平台":
-                backend_platform.value = content
-            elif label == "後端函式庫":
-                backend_lib.value = content
-
-        ui.notify("AI 再生完成 ✅", color="green")
-
-    # === ✅ 勾選再生欄位 ===
-    def toggle_field(field_name: str):
-        if field_name in State.selected_fields:
-            State.selected_fields.remove(field_name)
+    # --- 勾選再生欄位 ---
+    def toggle_field(field: str):
+        if field in State.selected_fields:
+            State.selected_fields.remove(field)
         else:
-            State.selected_fields.append(field_name)
+            State.selected_fields.append(field)
 
-    # === 🧱 UI 介面 ===
+    # ================== UI 佈局 ==================
     with ui.element().classes('grid grid-cols-4 gap-6 w-full h-screen bg-gray-50 p-6 items-start'):
 
-        # 🧭 左側導覽
+        # 左：流程
         with ui.card().classes('col-span-1 p-5 bg-white rounded-xl shadow-md h-full flex flex-col justify-between'):
-            with ui.column():
-                ui.label('🧭 專案流程').classes('text-lg font-bold mb-3 text-gray-800')
-                with ui.stepper().props('vertical').classes('w-full'):
-                    ui.step('專案管理').props('active')
-                    ui.step('使用案例管理')
-                    ui.step('使用案例明細')
-                    ui.step('專案物件瀏覽')
-                    ui.step('產生程式碼')
+            ui.label('🧭 專案流程').classes('text-lg font-bold mb-3 text-gray-800')
+            with ui.stepper().props('vertical').classes('w-full'):
+                ui.step('專案管理').props('active')
+                ui.step('使用案例管理')
+                ui.step('使用案例明細')
+                ui.step('專案物件瀏覽')
+                ui.step('程式碼生成')
             ui.button('下一步', color='blue').classes('w-full')
 
-        # 🧠 中間主內容
+        # 中：主內容
         with ui.card().classes('col-span-2 p-6 bg-white rounded-xl shadow-md flex flex-col gap-4 overflow-y-auto'):
             ui.label('📘 專案管理系統').classes('text-2xl font-bold text-center text-indigo-700')
 
@@ -196,7 +179,10 @@ def project_page():
             project_architecture = ui.textarea('系統架構').classes('w-full h-36 text-sm')
             project_description = ui.textarea('專案描述').classes('w-full h-36 text-sm')
 
-            ui.button('💾 儲存專案', color='green', on_click=save_project).classes('w-1/3 mx-auto')
+            with ui.row().classes('justify-center gap-4'):
+                ui.button('💾 儲存專案', color='green', on_click=save_project)
+                ui.button('📂 開啟專案', color='blue', on_click=on_open_project)
+                ui.button('🗑️ 刪除專案', color='red', on_click=on_delete_project)
 
             ui.separator()
             ui.label('📂 專案清單').classes('text-lg font-bold text-gray-700')
@@ -212,16 +198,11 @@ def project_page():
             }).classes('w-full h-64 mt-3') as project_table:
                 project_table.on('cellClicked', lambda e: setattr(State, 'selected_project', e.args.get('data')))
 
-            with ui.row().classes('justify-center gap-4 mt-3'):
-                ui.button('🗑️ 刪除專案', color='red', on_click=on_delete_project)
-                ui.button('📂 開啟專案', color='blue', on_click=on_open_project)
+            ui.timer(1.0, lambda: asyncio.create_task(refresh_project_table()), once=True)
 
-            ui.timer(1.5, lambda: asyncio.create_task(refresh_project_table()), once=True)
-
-        # 🤖 右側 AI 再生
+        # 右：AI 再生欄位
         with ui.card().classes('col-span-1 p-5 bg-white rounded-xl shadow-md flex flex-col gap-3 h-full'):
             ui.label('🤖 AI 欄位再生').classes('text-lg font-bold text-indigo-700 mb-2 text-center')
-
             for label in ['專案描述', '系統架構', '前端語言', '前端平台', '前端函式庫',
                           '後端語言', '後端平台', '後端函式庫']:
                 with ui.row().classes('justify-between items-center w-full'):
