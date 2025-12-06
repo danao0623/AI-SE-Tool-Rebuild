@@ -5,13 +5,28 @@ from flow_controllers.project_flow import ProjectFlowController
 
 
 def project_page():
-    """AI 專案管理頁面（支援 開啟/刪除；更新時清掉後續產物；可再生欄位）"""
+    """AI 專案管理頁面（支援 開啟/刪除；儲存/刪除後清空欄位；再生欄位功能）"""
 
     class State:
         loading = False
         selected_fields = []
-        generated_data = {}      # 以「顯示標籤」為 key 的暫存（方便直接綁 UI）
-        selected_project = None  # aggrid 選到的 row 資料
+        generated_data = {}      # 暫存欄位資料
+        selected_project = None  # aggrid 選取的 row 資料
+
+    # --- 🧹 共用：清空所有欄位 ---
+    def clear_all_fields():
+        project_name_input.value = ""
+        project_description.value = ""
+        project_architecture.value = ""
+        frontend_lang.value = ""
+        frontend_platform.value = ""
+        frontend_lib.value = ""
+        backend_lang.value = ""
+        backend_platform.value = ""
+        backend_lib.value = ""
+        State.generated_data.clear()
+        State.selected_project = None
+        ui.notify("欄位已清空 🧹", color="gray")
 
     # --- 共用：把 dict 值回填到表單 ---
     def update_fields(data: dict):
@@ -30,7 +45,7 @@ def project_page():
                 mapping[label].value = value
                 State.generated_data[label] = value
 
-    # --- 初次生成（固定 baseline）---
+    # --- 🧠 初次生成 ---
     async def generate_project():
         name = project_name_input.value.strip()
         if not name:
@@ -44,12 +59,11 @@ def project_page():
         if not rows:
             return ui.notify("AI 生成失敗", color="red")
 
-        # 轉 row -> label dict，並回填 UI
         State.generated_data = {r["項目"]: r["內容"] for r in rows}
         update_fields(State.generated_data)
         ui.notify("AI 初次生成完成 ✅", color="green")
 
-    # --- 再生（完整重生，但只覆蓋勾選欄位）---
+    # --- 🔄 再生 ---
     async def regenerate_selected():
         name = project_name_input.value.strip()
         if not name:
@@ -68,7 +82,7 @@ def project_page():
         update_fields(new_data)
         ui.notify("AI 再生完成 ✅", color="green")
 
-    # --- 儲存（若「核心欄位有變」→ 自動清掉 2/3 階段產物）---
+    # --- 💾 儲存專案 ---
     async def save_project():
         name = project_name_input.value.strip()
         if not name:
@@ -96,11 +110,14 @@ def project_page():
         if action == "created":
             ui.notify("專案已新增 ✅", color="green")
         elif action == "updated":
-            ui.notify("專案已更新（內容無重大變更）✅", color="green")
-        elif action == "updated_purged":
-            ui.notify("專案已更新 ✅ — 由於核心設定變更，已清空後續(UseCase/Detail/物件/圖/檔案)產物", color="orange")
+            ui.notify("專案已更新 ✅", color="green")
+        elif action == "updated_pending_purge":
+            ui.notify("專案已更新 ✅（核心設定已變更，後續階段尚未清除）", color="orange")
 
-    # --- 開啟專案（把 DB 內容塞回上方表單）---
+        # ✅ 儲存成功後清空欄位
+        clear_all_fields()
+
+    # --- 📂 開啟專案 ---
     async def on_open_project():
         row = State.selected_project
         if not row:
@@ -110,7 +127,6 @@ def project_page():
         if not detail:
             return ui.notify("找不到專案內容", color="red")
 
-        # 回填
         project_name_input.value = detail["name"]
         update_fields({
             "專案描述": detail["description"],
@@ -124,29 +140,42 @@ def project_page():
         })
         ui.notify(f"已開啟專案：{detail['name']}", color="green")
 
-    # --- 刪除專案（含級聯清掉後續產物）---
+    # --- 🗑️ 刪除專案 ---
     async def on_delete_project():
         row = State.selected_project
         if not row:
             return ui.notify("請先在下方選擇一個專案", color="red")
-        await ProjectFlowController.delete_project(row["id"])
-        ui.notify(f"已刪除專案：{row['專案名稱']}（含後續產物）", color="orange")
-        await refresh_project_table()
 
-    # --- 專案清單（列表）---
+        await ProjectFlowController.delete_project(row["id"])
+        await refresh_project_table()
+        ui.notify(f"已刪除專案：{row['專案名稱']} ✅", color="orange")
+        clear_all_fields()
+
+    # --- 📋 專案清單 ---
     async def refresh_project_table():
         rows = await ProjectFlowController.list_user_projects()
         project_table.options["rowData"] = rows
         project_table.update()
 
-    # --- 勾選再生欄位 ---
+    # --- ✅ 勾選欄位（AI 再生用） ---
     def toggle_field(field: str):
         if field in State.selected_fields:
             State.selected_fields.remove(field)
         else:
             State.selected_fields.append(field)
 
-    # ================== UI 佈局 ==================
+    # --- ▶️ 下一步（同步函式，避免背景 task 導頁問題） ---
+    def go_next_step():
+        row = State.selected_project
+        if not row:
+            return ui.notify("請先在下方『專案清單』中勾選一個專案，再按下一步", color="red")
+
+        # 由 FlowController 記錄「目前專案」的 context
+        ProjectFlowController.set_current_project_context(row)
+
+        ui.navigate.to('/usecase_actor')
+
+    # ================== 🧱 UI ==================
     with ui.element().classes('grid grid-cols-4 gap-6 w-full h-screen bg-gray-50 p-6 items-start'):
 
         # 左：流程
@@ -158,7 +187,8 @@ def project_page():
                 ui.step('使用案例明細')
                 ui.step('專案物件瀏覽')
                 ui.step('程式碼生成')
-            ui.button('下一步', color='blue').classes('w-full')
+
+            ui.button('下一步', color='blue', on_click=go_next_step).classes('w-full')
 
         # 中：主內容
         with ui.card().classes('col-span-2 p-6 bg-white rounded-xl shadow-md flex flex-col gap-4 overflow-y-auto'):
@@ -187,8 +217,10 @@ def project_page():
             ui.separator()
             ui.label('📂 專案清單').classes('text-lg font-bold text-gray-700')
 
+            # ✅ 專案清單：第一欄是單選勾勾，搭配 selectionChanged/rowClicked 更新 State.selected_project
             with ui.aggrid({
                 'columnDefs': [
+                    {'headerName': '', 'checkboxSelection': True, 'width': 50},
                     {'headerName': '專案名稱', 'field': '專案名稱', 'sortable': True, 'filter': True},
                     {'headerName': '專案描述', 'field': '專案描述', 'flex': 2},
                     {'headerName': '系統架構', 'field': '系統架構', 'flex': 2},
@@ -196,7 +228,20 @@ def project_page():
                 'rowSelection': 'single',
                 'defaultColDef': {'resizable': True, 'sortable': True, 'filter': True},
             }).classes('w-full h-64 mt-3') as project_table:
-                project_table.on('cellClicked', lambda e: setattr(State, 'selected_project', e.args.get('data')))
+
+                def update_selected(e):
+                    # 點任一 cell 會有 data；只有選取變更時才會有 api
+                    data = e.args.get('data')
+                    if data:
+                        State.selected_project = data
+                    else:
+                        api = e.args.get('api')
+                        if api:
+                            rows = api.getSelectedRows()
+                            State.selected_project = rows[0] if rows else None
+
+                project_table.on('cellClicked', update_selected)
+                project_table.on('selectionChanged', update_selected)
 
             ui.timer(1.0, lambda: asyncio.create_task(refresh_project_table()), once=True)
 
