@@ -77,6 +77,14 @@ class BaseController:
             print(f"📋 查詢結果 ({len(records)} 筆): {records}")
             return records
         
+    # 📍 依 primary key 取得單筆資料（最常用）
+    @classmethod
+    async def get(cls, obj_id: int):
+        async with get_async_session_context() as session:
+            obj = await session.get(cls.model, obj_id)
+            print(f"🔍 依 ID 查詢結果: {obj}")
+            return obj
+        
     # 📍 查詢單筆資料（例如根據帳號、ID）
     @classmethod
     async def get_single(cls, **filters):
@@ -94,3 +102,4 @@ class BaseController:
             obj = result.scalars().first()
             print(f"🔍 單筆查詢結果: {obj}")
             return obj
+    

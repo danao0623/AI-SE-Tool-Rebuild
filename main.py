@@ -5,6 +5,13 @@ from views.login_view import login_page
 from flow_controllers.login_flow import LoginFlowController
 from views.project_view import project_page
 from views.usecase_and_actor_view import usecase_actor_page
+from views.usecase_detail_view import usecase_detail_page
+from views.event_summary_view import event_summary_page
+from views.object_view import svo_page
+from views.mermaid_view import mermaid_page
+from views.blueprint_view import blueprint_page
+from views.code_view import code_page
+from flow_controllers.blueprint_api_flow import router as blueprint_router
 
 
 @ui.page('/')
@@ -36,6 +43,36 @@ def project_page_route():
 def usecase_actor_page_route():
     usecase_actor_page()
 
+@ui.page('/usecase_detail')
+def usecase_detail_page_route():
+    usecase_detail_page()
+
+@ui.page('/event_summary')
+def event_summary_page_route():
+    event_summary_page()
+
+
+@ui.page("/svo")
+def svo_page_route():
+    svo_page()
+
+@ui.page("/mermaid")
+def mermaid_page_route():
+    mermaid_page()
+
+@ui.page("/blueprint")
+def blueprint_page_route():
+    blueprint_page()
+
+@ui.page("/code")
+def code_page_route():
+    code_page()
+
+# ... 其他 import
+
+app.add_static_files('/files', 'files')
+
+app.include_router(blueprint_router)
 
 ui.run(
     storage_secret='private key to secure the browser session cookie',

@@ -36,7 +36,7 @@ def login_page(on_login=None, on_register=None, redirect_url='/project'):
                 ui.button('註冊', color='green', on_click=on_register_click).classes('w-1/2 ml-2 h-12 text-base font-semibold')
 
             ui.separator().classes('my-6')
-            ui.label('© 2025 澎湖科技大學 資管系 AI-SE 專題').classes('text-xs text-gray-500 text-center mt-4')
+            ui.label('© 2025 XX科技大學 資管系 AI-ASE 專題').classes('text-xs text-gray-500 text-center mt-4')
 
 def _map_color(status: str):
     return {

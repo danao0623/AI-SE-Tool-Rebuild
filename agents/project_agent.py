@@ -1,7 +1,9 @@
 import aiohttp
 import asyncio
 import json
-from api.api_sys import API_URL, HEADERS
+#from api.api_sys import API_URL, HEADERS
+from api.api_sys_openai import API_URL, HEADERS
+
 from utils.json_cleaner import clean_json_text
 
 

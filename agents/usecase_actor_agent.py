@@ -1,228 +1,362 @@
-# agents/usecase_actor_agent.py
-
-import json
+from __future__ import annotations
+from typing import Dict, List, Any
 import aiohttp
-
 from api.api_sys import API_URL, HEADERS
-from utils.json_cleaner import clean_json_text
 
 
-class UsecaseActorAgent:
+class UseCaseActorAgent:
     """
-    使用案例 / 角色 Agent（純線上 Gemini 版）
-
-    兩階段流程：
-    1. 先呼叫 LLM 產生 5 個 Actor（名稱 + 描述）
-    2. 再呼叫 LLM 根據這 5 個 Actor 產生每個 Actor 對應的 3 個 Use Case（共 15 個）
-
-    → 最後組成統一 JSON 給 FlowController 與 View。
+    和 AI 溝通，產生 / 重生 Actor 與 UseCase 的 Agent。
+    ✨ 全部採用「純文字格式」，避免 JSON 解析錯誤。
     """
 
-    # ================================================================
-    #                       對外主要入口
-    # ================================================================
+    # ============================================================
+    #  一次產生 Actors + UseCases（第一次使用）
+    # ============================================================
     @staticmethod
-    async def generate_actor_usecase_json(project_info: dict) -> dict:
+    async def generate_actors_and_usecases(
+        project_info: Dict[str, Any],
+    ) -> Dict[str, Any]:
+
         project_name = project_info.get("name", "未命名專案")
+        project_desc = project_info.get("description", "")
 
-        # STEP 1：產生 5 Actors
-        actors = await UsecaseActorAgent._generate_actors(project_name)
+        prompt = f"""
+你是一名專業的系統分析師，正在為一個系統建立「使用者角色(Actors)」與「使用案例(Use Cases)」。
+
+系統名稱：{project_name}
+系統描述：
+{project_desc}
+
+請你：
+1. 設計 4~6 個合理的系統角色。
+2. 為每個 Actor 設計 3 個使用案例。
+3. 每個使用案例的 summary 大約 30~50 個中文字。
+4. summary 必須是一句完整的句子，以「。」結尾。
+
+❗請用純文字格式回覆，不要 JSON，不要 Markdown：
+
+[ACTORS]
+角色名稱1 | 角色說明1
+角色名稱2 | 角色說明2
+...
+
+[USE_CASES]
+使用案例名稱1 | 主要角色名稱1 | 使用案例中文概述（30~50 字，句號結尾）
+使用案例名稱2 | 主要角色名稱2 | 使用案例中文概述
+...
+"""
+
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048},
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                API_URL, headers=HEADERS, json=payload, timeout=120
+            ) as resp:
+                if resp.status != 200:
+                    print("❌ generate_actors_and_usecases API error:", resp.status)
+                    print(await resp.text())
+                    return {}
+
+                data = await resp.json()
+
+        raw_text = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        )
+
+        print("\n🧾 generate_actors_and_usecases 原始回應：")
+        print(raw_text)
+
+        actors, use_cases = [], []
+        section = None
+
+        for line in raw_text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("```"):
+                continue
+
+            upper = line.upper()
+            if upper.startswith("[ACTORS]"):
+                section = "actors"
+                continue
+            if upper.startswith("[USE_CASES]"):
+                section = "use_cases"
+                continue
+            if section is None:
+                continue
+
+            parts = [p.strip() for p in line.split("|")]
+
+            # ---- Actors ----
+            if section == "actors":
+                if len(parts) >= 1:
+                    name = parts[0].lstrip("：:-— ")
+                    desc = parts[1].lstrip("：:-— ") if len(parts) >= 2 else ""
+                    if name and name not in ("名稱", "角色名稱"):
+                        actors.append({"name": name, "description": desc})
+
+            # ---- UseCases ----
+            if section == "use_cases":
+                if len(parts) >= 3:
+                    name = parts[0].lstrip("：:-— ")
+                    primary = parts[1].lstrip("：:-— ")
+                    summary = "|".join(parts[2:]).lstrip("：:-— ").strip()
+                    if name and primary:
+                        use_cases.append(
+                            {
+                                "name": name,
+                                "primary_actor": primary,
+                                "summary": summary,
+                            }
+                        )
+
+        print("\n✅ generate_actors_and_usecases 解析結果：")
+        print("Actors:", actors)
+        print("UseCases:", use_cases)
+
         if not actors:
-            print("❌ 無 Actors，AI 生成失敗")
             return {}
 
-        # STEP 2：產生每個 Actor 3 個 UseCases（共 15 筆）
-        usecase_list = await UsecaseActorAgent._generate_usecase_list(project_name, actors)
-        if not usecase_list:
-            print("❌ 無 UseCase List，AI 生成失敗")
-            return {}
-
-        # STEP 3：重組成系統統一格式
-        use_cases: list[dict] = []
-        for uc in usecase_list:
-            use_cases.append(
-                {
-                    "name": uc.get("use_case_name", ""),
-                    "summary": uc.get("description", ""),
-                    "primary_actor": uc.get("actor", ""),
-                    "other_actors": [],
-                }
-            )
-
-        final = {
+        return {
             "project_name": project_name,
             "actors": actors,
             "use_cases": use_cases,
         }
 
-        print("\n📦【UsecaseActorAgent 最終完整 JSON】")
-        print(json.dumps(final, ensure_ascii=False, indent=4))
-        print("=" * 80)
-
-        return final
-
-    # ================================================================
-    #                      第一階段：產生 5 個 Actor
-    # ================================================================
+    # ============================================================
+    #   單一 UseCase 重生（實戰版：>=15字即可，自動補句號）
+    # ============================================================
     @staticmethod
-    async def _generate_actors(project_name: str) -> list[dict]:
+    async def regenerate_single_usecase(
+        project_info: Dict[str, Any],
+        actor_name: str,
+        old_usecase: Dict[str, Any],
+    ) -> Dict[str, Any]:
 
-        prompt = f"""
-你是一名資深系統分析師，請根據「{project_name}」系統需求，
-產生 5 位系統使用者（Actor），包含以下內容：
+        project_name = project_info.get("name", "未命名專案")
+        project_desc = project_info.get("description", "")
+        old_name = old_usecase.get("name") or old_usecase.get("使用案例名稱", "")
+        old_summary = old_usecase.get("summary") or old_usecase.get("概述", "")
 
-- id：從 1 開始編號
-- name：角色名稱
-- description：角色的職責描述
+        # ---- Prompt ----
+        base_prompt = f"""
+系統名稱：{project_name}
+系統描述：
+{project_desc}
 
-請務必以**純 JSON**格式回答，不要加入文字說明，也不要加上 ```json。
+角色「{actor_name}」的舊使用案例：
+- 名稱：{old_name}
+- 概述：{old_summary}
 
-格式如下：
-{{
-  "project_name": "{project_name}",
-  "use_case_actor": [
-    {{
-      "id": 1,
-      "name": "角色名稱",
-      "description": "角色描述"
-    }}
-  ]
-}}
+請為角色「{actor_name}」重新產生一個新的使用案例：
+- 名稱與內容不可完全相同
+- 建議 summary 30~50 字，但不強制
+- 請寫成一句完整中文句子，最好以「。」結尾
+
+❗回覆格式（純文字）：
+使用案例名稱 | 中文概述
 """
 
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 1.0,
-                "maxOutputTokens": 2048,
-                "topP": 0.8,
-                "topK": 10,
-            },
-        }
-
-        # ---- 呼叫 Gemini ----
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                API_URL, headers=HEADERS, json=payload, timeout=60
-            ) as resp:
-
-                if resp.status != 200:
-                    print("❌ _generate_actors API 錯誤:", resp.status)
-                    print(await resp.text())
-                    return []
-
-                data = await resp.json()
-                text = (
-                    data.get("candidates", [{}])[0]
-                    .get("content", {})
-                    .get("parts", [{}])[0]
-                    .get("text", "{}")
-                )
-
-        cleaned = clean_json_text(text)
-
-        try:
-            json_obj = json.loads(cleaned)
-        except Exception:  # noqa: BLE001
-            print("❌ Actors JSON 解析失敗")
-            print(cleaned)
-            return []
-
-        actors_raw = json_obj.get("use_case_actor", []) or []
-
-        # 整理格式：我們只需要 name + description
-        actors = [
-            {
-                "name": a.get("name", ""),
-                "description": a.get("description", ""),
+        async def call_api() -> str:
+            payload = {
+                "contents": [{"parts": [{"text": base_prompt}]}],
+                "generationConfig": {"temperature": 0.8, "maxOutputTokens": 512},
             }
-            for a in actors_raw
-        ]
 
-        print("\n🎭【_generate_actors 產生的 Actors】")
-        print(json.dumps(actors, ensure_ascii=False, indent=4))
-        print("=" * 80)
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    API_URL, headers=HEADERS, json=payload, timeout=90
+                ) as resp:
+                    if resp.status != 200:
+                        print("❌ regenerate_single_usecase API 錯誤:", resp.status)
+                        print(await resp.text())
+                        return ""
 
-        return actors
+                    data = await resp.json()
 
-    # ================================================================
-    #         第二階段：產生每個 Actor 的 3 個 UseCases（共 15）
-    # ================================================================
+            return (
+                data.get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+                .strip()
+            )
+
+        def parse(text: str) -> Dict[str, str] | None:
+            print("\n🔁 regenerate_single_usecase 原始回應：")
+            print(text)
+
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            flat = " ".join(lines)
+
+            if "|" not in flat:
+                return None
+
+            left, right = flat.split("|", 1)
+            name = left.strip().lstrip("：:-— ")
+            summary = right.strip().lstrip("：:-— ")
+
+            if not name or not summary:
+                return None
+
+            # ---- 驗收邏輯（寬鬆版）----
+            # 只要 >= 15 字就接受（避免一直被拒絕）
+            if len(summary) < 15:
+                print(f"⚠ summary 太短：{summary}")
+                return None
+
+            # 句尾若沒有標點 → 自動補「。」
+            if not summary.endswith(("。", "！", "？")):
+                summary += "。"
+
+            return {"name": name, "summary": summary}
+
+        # ---- 最多兩次重試 ----
+        for attempt in range(2):
+            text = await call_api()
+            parsed = parse(text)
+
+            if parsed:
+                return {
+                    "name": parsed["name"],
+                    "summary": parsed["summary"],
+                    "primary_actor": actor_name,
+                }
+
+            print(f"🔄 第 {attempt+1} 次重生不合格，準備重試…")
+
+        print("❌ 最終仍不合格，本次重生放棄")
+        return {}
+
+    # ============================================================
+    #   重生 Actor + 多個 UseCases（完整純文字版）
+    # ============================================================
     @staticmethod
-    async def _generate_usecase_list(
-        project_name: str, actors: list[dict]
-    ) -> list[dict]:
+    async def regenerate_actor_with_usecases(
+        project_info: Dict[str, Any],
+        old_actor: Dict[str, Any],
+        old_usecases_for_actor: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+
+        project_name = project_info.get("name", "")
+        project_desc = project_info.get("description", "")
+
+        actor_name = old_actor.get("name", "")
+        actor_desc = old_actor.get("description", "")
+
+        uc_text = "\n".join(
+            [f"- {u.get('name')}：{u.get('summary')}" for u in old_usecases_for_actor]
+        )
 
         prompt = f"""
-你是一名系統分析師。以下是此系統的 5 位使用者角色（Actors）：
+你是一名資深系統分析師，協助重新設計角色與使用案例：
 
-{json.dumps(actors, ensure_ascii=False, indent=4)}
+系統名稱：{project_name}
+描述：{project_desc}
 
-請為每一位 Actor 設計 **3 個使用案例（Use Case）**，
-每個 UseCase 必須包含：
-- actor：角色名稱
-- use_case_name：使用案例名稱
-- description：使用案例描述（簡要）
+舊角色：
+- 名稱：{actor_name}
+- 說明：{actor_desc}
 
-總共應該產生 15 個 Use Case。
+舊使用案例：
+{uc_text}
 
-⚠️ 請嚴格輸出純 JSON，不要任何說明文字、不要 Markdown。
+請你重新產生：
+1. 一個新的角色名稱 + 說明
+2. 三個新的使用案例（每個 summary 約 30~50 字，句號結尾）
 
-格式：
-{{
-  "project_name": "{project_name}",
-  "use_case_list": [
-    {{
-      "actor": "角色名稱",
-      "use_case_name": "名稱",
-      "description": "描述"
-    }}
-  ]
-}}
+❗回覆格式（純文字）：
+
+[ACTOR]
+新角色名稱 | 新角色說明
+
+[USE_CASES]
+案例1 | 概述（30~50 字）
+案例2 | 概述
+案例3 | 概述
 """
 
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 1.0,
-                "maxOutputTokens": 4096,
-                "topP": 0.8,
-                "topK": 10,
-            },
+            "generationConfig": {"temperature": 0.8, "maxOutputTokens": 2048},
         }
 
-        # ---- 呼叫 Gemini ----
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                API_URL, headers=HEADERS, json=payload, timeout=60
+                API_URL, headers=HEADERS, json=payload, timeout=120
             ) as resp:
-
                 if resp.status != 200:
-                    print("❌ _generate_usecase_list API 錯誤:", resp.status)
+                    print("❌ regenerate_actor_with_usecases API 錯誤:", resp.status)
                     print(await resp.text())
-                    return []
+                    return {}
 
                 data = await resp.json()
-                text = (
-                    data.get("candidates", [{}])[0]
-                    .get("content", {})
-                    .get("parts", [{}])[0]
-                    .get("text", "{}")
-                )
 
-        cleaned = clean_json_text(text)
+        raw = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        )
 
-        try:
-            parsed = json.loads(cleaned)
-        except Exception:  # noqa: BLE001
-            print("❌ UseCaseList JSON 解析失敗")
-            print(cleaned)
-            return []
+        print("\n♻ regenerate_actor_with_usecases 原始回應：")
+        print(raw)
 
-        use_case_list = parsed.get("use_case_list", []) or []
+        section = None
+        new_actor_name, new_actor_desc = "", ""
+        new_usecases = []
 
-        print("\n📘【_generate_usecase_list 產生的 UseCase List】")
-        print(json.dumps(use_case_list, ensure_ascii=False, indent=4))
-        print("=" * 80)
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or line.startswith("```"):
+                continue
 
-        return use_case_list
+            upper = line.upper()
+            if upper.startswith("[ACTOR]"):
+                section = "actor"
+                continue
+            if upper.startswith("[USE_CASES]"):
+                section = "use_cases"
+                continue
+            if section is None:
+                continue
+
+            parts = [p.strip() for p in line.split("|")]
+
+            if section == "actor":
+                if len(parts) >= 1:
+                    new_actor_name = parts[0].lstrip("：:-— ")
+                    new_actor_desc = (
+                        parts[1].lstrip("：:-— ") if len(parts) >= 2 else ""
+                    )
+                continue
+
+            if section == "use_cases":
+                if len(parts) >= 2:
+                    uc_name = parts[0].lstrip("：:-— ")
+                    summary = "|".join(parts[1:]).strip().lstrip("：:-— ")
+                    if uc_name:
+                        # 自動補句號
+                        if not summary.endswith(("。", "！", "？")):
+                            summary += "。"
+                        new_usecases.append(
+                            {
+                                "name": uc_name,
+                                "summary": summary,
+                                "primary_actor": new_actor_name,
+                            }
+                        )
+
+        if not new_actor_name:
+            return {}
+
+        return {
+            "actor": {"name": new_actor_name, "description": new_actor_desc},
+            "use_cases": new_usecases,
+        }

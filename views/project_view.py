@@ -112,7 +112,7 @@ def project_page():
         elif action == "updated":
             ui.notify("專案已更新 ✅", color="green")
         elif action == "updated_pending_purge":
-            ui.notify("專案已更新 ✅（核心設定已變更，後續階段尚未清除）", color="orange")
+            ui.notify("專案已更新 ✅（核心設定已變更，後續階段已清除）", color="orange")
 
         # ✅ 儲存成功後清空欄位
         clear_all_fields()
@@ -182,11 +182,13 @@ def project_page():
         with ui.card().classes('col-span-1 p-5 bg-white rounded-xl shadow-md h-full flex flex-col justify-between'):
             ui.label('🧭 專案流程').classes('text-lg font-bold mb-3 text-gray-800')
             with ui.stepper().props('vertical').classes('w-full'):
-                ui.step('專案管理').props('active')
-                ui.step('使用案例管理')
-                ui.step('使用案例明細')
-                ui.step('專案物件瀏覽')
-                ui.step('程式碼生成')
+                ui.step('專案管理').props('name=1 done')
+                ui.step('專案案例管理').props('name=2')
+                ui.step('使用案例明細').props('name=3')
+                ui.step('三段式事件列表').props('name=4')
+                ui.step('專案物件瀏覽').props('name=5')
+                ui.step('UML 圖生成').props('name=6')
+                ui.step('產生程式碼').props('name=7')
 
             ui.button('下一步', color='blue', on_click=go_next_step).classes('w-full')
 

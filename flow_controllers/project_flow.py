@@ -1,7 +1,9 @@
 from nicegui import app
-from agents.project_agent import ProjectAgent
+#from agents.project_agent import ProjectAgent
+from agents.project_agent_openai import ProjectAgent
 from controllers.project_controller import ProjectController
 from controllers.user_account_controller import UserAccountController
+from flow_controllers.usecase_actor_flow import UsecaseActorFlowController  # 專案級資料清除
 
 
 class ProjectFlowController:
@@ -72,10 +74,10 @@ class ProjectFlowController:
         """
         儲存 / 更新專案基本資料。
         回傳格式：
-        - {"ok": False}                    → 尚未登入
-        - {"ok": True, "action": "created"}                → 新增
-        - {"ok": True, "action": "updated"}                → 更新（核心欄位無變）
-        - {"ok": True, "action": "updated_pending_purge"}  → 更新（核心欄位有變）
+        - {"ok": False}                               → 尚未登入
+        - {"ok": True, "action": "created"}           → 新增
+        - {"ok": True, "action": "updated"}           → 更新（核心欄位無變）
+        - {"ok": True, "action": "updated_pending_purge"}  → 更新（核心欄位有變，已觸發後續資料清除）
         """
         uid = await ProjectFlowController.get_current_user_id()
         if not uid:
@@ -89,13 +91,16 @@ class ProjectFlowController:
             await ProjectController.add(**data)
             return {"ok": True, "action": "created"}
 
-        # 比對核心欄位（目前只記錄，尚未觸發 purge）
+        # 比對核心欄位：如果有變更，除了更新 Project 之外，還要清掉後續產物（Actor / UseCase / 事件列表 / 圖等）
         core_changed = ProjectFlowController._has_core_changes(existing, data)
         if core_changed:
+            # 先更新專案本身
             await ProjectController.update(existing.id, **data)
-            print("⚠️ [提醒] 核心欄位變更，但目前僅更新 Project，未清理後續階段。")
+            # 再清除該專案底下所有後續階段資料，避免舊需求產物與新專案內容不一致
+            await UsecaseActorFlowController.purge_all_for_project(existing.id)
             return {"ok": True, "action": "updated_pending_purge"}
 
+        # 如果核心欄位沒有變更，就單純更新專案，不動後續資料
         await ProjectController.update(existing.id, **data)
         return {"ok": True, "action": "updated"}
 
@@ -120,7 +125,10 @@ class ProjectFlowController:
     # === 刪除專案 ===
     @staticmethod
     async def delete_project(project_id: int):
-        """目前僅刪除專案本身（後續階段資料之後可在這裡一起清掉）"""
+        """刪除專案時，同步清除其底下所有衍生資料（Actor / UseCase / 事件列表 / 圖等）。"""
+        # 先刪除該專案底下的所有後續資料，避免外鍵約束錯誤與資料遺留
+        await UsecaseActorFlowController.purge_all_for_project(project_id)
+        # 再刪除專案本身
         return await ProjectController.delete(project_id)
 
     # === 取得專案詳細 ===
@@ -143,20 +151,12 @@ class ProjectFlowController:
         }
 
     # === 當前專案上下文（給「使用案例管理」等下一頁用）===
-
     @staticmethod
     def set_current_project_context(project: dict | int, project_name: str | None = None) -> None:
         """
         設定目前選擇的專案：
-
-        - View 這邊通常會直接把 AgGrid 的整列 dict 丟進來：
-            ProjectFlowController.set_current_project_context(row)
-          此時會從 row['id']、row['專案名稱'] 等欄位取出需要的值。
-
-        - 也相容舊版的：
-            set_current_project_context(project_id, project_name)
+        - View 可以直接把 AgGrid 的整列 dict 丟進來
         """
-        # 兩種呼叫方式都支援
         if isinstance(project, dict):
             project_id = project.get("id")
             name = project.get("專案名稱") or project.get("name") or ""
@@ -171,7 +171,11 @@ class ProjectFlowController:
         if project_id is None:
             # 清空 context
             app.storage.user.pop("current_project", None)
+            app.storage.user.pop("current_project_id", None)
             return
+        
+        app.storage.user["current_project_id"] = int(project_id)
+
 
         app.storage.user["current_project"] = {
             "id": project_id,
@@ -182,17 +186,7 @@ class ProjectFlowController:
 
     @staticmethod
     def get_current_project_context() -> dict | None:
-        """
-        取得目前選擇的專案（沒有就回傳 None）
-
-        回傳格式範例：
-        {
-            "id": 1,
-            "name": "AI 智慧選股系統",
-            "description": "...",
-            "architecture": "..."
-        }
-        """
+        """取得目前選擇的專案（沒有就回傳 None）"""
         return app.storage.user.get("current_project")
 
     # === 內部共用：把 AI 回傳 dict 轉成表格列 ===

@@ -16,6 +16,9 @@ from models.class_diagram import ClassDiagram
 from models.class_object import ClassObject
 from models.method import Method
 from models.attribute import Attribute
+from models.project_file import ProjectFile
+from models.blueprint_state import BlueprintState
+from models.code import CodeSnapshot
 
 async def main():
     print("🧹 清空資料庫中所有表...")
